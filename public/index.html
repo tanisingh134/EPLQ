@@ -410,58 +410,59 @@
             }
         };
 
-        const initializeFirebase = async () => {
+       const initializeFirebase = async () => {
             try {
                 if (Object.keys(firebaseConfig).length === 0) {
-                    throw new Error("Firebase config not provided.");
+                    throw new Error("Firebase config not provided. Please provide a valid config to run this application.");
                 }
                 app = initializeApp(firebaseConfig);
                 db = getFirestore(app);
                 auth = getAuth(app);
-                functions = getFunctions(app);
-                // Offline persistence
-                try { await enableIndexedDbPersistence(db); } catch (e) { console.warn('Persistence error', e); }
-                logMessage('Firebase initialized.');
+                logToFeed('Firebase initialized.');
 
                 onAuthStateChanged(auth, async (user) => {
                     showLoading(true);
                     if (user) {
+                        statusFeed.classList.remove('hidden');
                         userId = user.uid;
                         const userDocRef = doc(db, 'artifacts', appId, 'users', userId);
                         const userDoc = await getDoc(userDocRef);
-                        authFormContainer.classList.add('hidden');
-                        mainContainer.classList.remove('hidden');
                         if (userDoc.exists()) {
                             const userData = userDoc.data();
                             if (userData.role === 'admin') {
                                 showAdminDashboard();
-                                await loadPoiTable();
+                                logToFeed('Logged in as Admin.');
                             } else {
                                 showUserDashboard();
+                                logToFeed('Logged in as User.');
                             }
                         } else {
-                            showUserDashboard();
+                            // First time user, check if they are the first user to be admin
+                            const usersCollectionRef = collection(db, 'artifacts', appId, 'users');
+                            const usersSnapshot = await getDocs(usersCollectionRef);
+                            const isFirstUser = usersSnapshot.empty;
+                            
+                            const role = isFirstUser ? 'admin' : 'user';
+                            await setDoc(userDocRef, { role });
+                            
+                            if (role === 'admin') {
+                                showAdminDashboard();
+                                logToFeed('Registered as Admin.');
+                            } else {
+                                showUserDashboard();
+                                logToFeed('Registered as User.');
+                            }
                         }
                     } else {
-                        authFormContainer.classList.remove('hidden');
-                        mainContainer.classList.add('hidden');
-                        if (initialAuthToken) {
-                            await signInWithCustomToken(auth, initialAuthToken).catch(error => {
-                                console.error('Custom token sign-in failed:', error);
-                                logMessage(`Authentication failed: ${error.message}`, true);
-                            });
-                        } else {
-                            await signInAnonymously(auth).catch(error => {
-                                console.error('Anonymous sign-in failed:', error);
-                                logMessage(`Authentication failed: ${error.message}`, true);
-                            });
-                        }
+                        showAuthForm();
+                        statusFeed.classList.add('hidden');
+                        logToFeed('Logged out. Please log in.');
                     }
                     showLoading(false);
                 });
             } catch (error) {
+                logToFeed(`Error initializing Firebase: ${error.message}`, true);
                 console.error("Firebase initialization error:", error);
-                logMessage(`Error initializing Firebase: ${error.message}`, true);
                 showLoading(false);
             }
         };
@@ -1409,3 +1410,4 @@
     </script>
 </body>
 </html>
+
