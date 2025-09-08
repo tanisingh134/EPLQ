@@ -392,7 +392,7 @@
         let heatmapEnabled = false;
         let heatLayer;
         let animationPaused = false;
-
+        firebase.auth().setPersistence(firebase.auth.Auth.Persistence.NONE);
         const logMessage = (message, isError = false) => {
             messageText.textContent = message;
             messageText.style.color = isError ? '#ef4444' : '#4b5563';
@@ -410,59 +410,58 @@
             }
         };
 
-       const initializeFirebase = async () => {
+        const initializeFirebase = async () => {
             try {
                 if (Object.keys(firebaseConfig).length === 0) {
-                    throw new Error("Firebase config not provided. Please provide a valid config to run this application.");
+                    throw new Error("Firebase config not provided.");
                 }
                 app = initializeApp(firebaseConfig);
                 db = getFirestore(app);
                 auth = getAuth(app);
-                logToFeed('Firebase initialized.');
+                functions = getFunctions(app);
+                // Offline persistence
+                try { await enableIndexedDbPersistence(db); } catch (e) { console.warn('Persistence error', e); }
+                logMessage('Firebase initialized.');
 
                 onAuthStateChanged(auth, async (user) => {
                     showLoading(true);
                     if (user) {
-                        statusFeed.classList.remove('hidden');
                         userId = user.uid;
                         const userDocRef = doc(db, 'artifacts', appId, 'users', userId);
                         const userDoc = await getDoc(userDocRef);
+                        authFormContainer.classList.add('hidden');
+                        mainContainer.classList.remove('hidden');
                         if (userDoc.exists()) {
                             const userData = userDoc.data();
                             if (userData.role === 'admin') {
                                 showAdminDashboard();
-                                logToFeed('Logged in as Admin.');
+                                await loadPoiTable();
                             } else {
                                 showUserDashboard();
-                                logToFeed('Logged in as User.');
                             }
                         } else {
-                            // First time user, check if they are the first user to be admin
-                            const usersCollectionRef = collection(db, 'artifacts', appId, 'users');
-                            const usersSnapshot = await getDocs(usersCollectionRef);
-                            const isFirstUser = usersSnapshot.empty;
-                            
-                            const role = isFirstUser ? 'admin' : 'user';
-                            await setDoc(userDocRef, { role });
-                            
-                            if (role === 'admin') {
-                                showAdminDashboard();
-                                logToFeed('Registered as Admin.');
-                            } else {
-                                showUserDashboard();
-                                logToFeed('Registered as User.');
-                            }
+                            showUserDashboard();
                         }
                     } else {
-                        showAuthForm();
-                        statusFeed.classList.add('hidden');
-                        logToFeed('Logged out. Please log in.');
+                        authFormContainer.classList.remove('hidden');
+                        mainContainer.classList.add('hidden');
+                        if (initialAuthToken) {
+                            await signInWithCustomToken(auth, initialAuthToken).catch(error => {
+                                console.error('Custom token sign-in failed:', error);
+                                logMessage(`Authentication failed: ${error.message}`, true);
+                            });
+                        } else {
+                            await signInAnonymously(auth).catch(error => {
+                                console.error('Anonymous sign-in failed:', error);
+                                logMessage(`Authentication failed: ${error.message}`, true);
+                            });
+                        }
                     }
                     showLoading(false);
                 });
             } catch (error) {
-                logToFeed(`Error initializing Firebase: ${error.message}`, true);
                 console.error("Firebase initialization error:", error);
+                logMessage(`Error initializing Firebase: ${error.message}`, true);
                 showLoading(false);
             }
         };
@@ -530,110 +529,98 @@
             return Array.from(result);
         };
 
-         const logMessage = (message, isError = false) => {
-            messageText.textContent = message;
-            messageText.style.color = isError ? '#ef4444' : '#4b5563';
-            messageText.style.opacity = 1;
-            setTimeout(() => {
-                messageText.style.opacity = 0;
-            }, 5000);
-        };
-
-        const showLoading = (show) => {
-            if (show) {
-                loadingSpinner.classList.remove('hidden');
-            } else {
-                loadingSpinner.classList.add('hidden');
-            }
-        };
-        
         const showAuthForm = () => {
-            authForm.classList.remove('hidden');
-            adminDashboard.classList.add('hidden');
-            userDashboard.classList.add('hidden');
+            authFormContainer.classList.remove('hidden');
+            mainContainer.classList.add('hidden');
+            mainContainer.scrollTop = 0;
         };
 
         const showAdminDashboard = () => {
-            authForm.classList.add('hidden');
+            authFormContainer.classList.add('hidden');
+            mainContainer.classList.remove('hidden');
             adminDashboard.classList.remove('hidden');
             userDashboard.classList.add('hidden');
+            mainContainer.scrollTop = 0;
         };
 
         const showUserDashboard = () => {
-            authForm.classList.add('hidden');
+            authFormContainer.classList.add('hidden');
+            mainContainer.classList.remove('hidden');
             adminDashboard.classList.add('hidden');
             userDashboard.classList.remove('hidden');
+            mainContainer.scrollTop = 0;
         };
 
-        const setupEventListeners = () => {
-            registerBtn.addEventListener('click', async () => {
-                showLoading(true);
-                const email = emailInput.value;
-                const password = passwordInput.value;
-                if (!email || !password) {
-                    logMessage('Please enter an email and password.', true);
-                    showLoading(false);
-                    return;
-                }
-                try {
-                    await createUserWithEmailAndPassword(auth, email, password);
-                    logMessage('Registration successful! Please log in.');
-                    emailInput.value = '';
-                    passwordInput.value = '';
-                } catch (error) {
-                    console.error('Registration error:', error);
-                    logMessage(`Registration failed: ${error.message}`, true);
-                } finally {
-                    showLoading(false);
-                }
-            });
+        registerBtn.addEventListener('click', async () => {
+            showLoading(true);
+            const email = emailInput.value;
+            const password = passwordInput.value;
+            if (!email || !password) {
+                logMessage('Please enter an email and password.', true);
+                showLoading(false);
+                return;
+            }
+            try {
+                await createUserWithEmailAndPassword(auth, email, password);
+                logMessage('Registration successful! Please log in.');
+                emailInput.value = '';
+                passwordInput.value = '';
+            } catch (error) {
+                console.error('Registration error:', error);
+                logMessage(`Registration failed: ${error.message}`, true);
+            } finally {
+                showLoading(false);
+            }
+        });
 
-            loginBtn.addEventListener('click', async () => {
-                showLoading(true);
-                const email = emailInput.value;
-                const password = passwordInput.value;
-                if (!email || !password) {
-                    logMessage('Please enter an email and password.', true);
-                    showLoading(false);
-                    return;
-                }
-                try {
-                    console.log('Attempting login with email:', email);
-                    await signInWithEmailAndPassword(auth, email, password);
-                    logMessage('Login successful.');
-                } catch (error) {
-                    console.error('Login error:', error);
-                    logMessage(`Login failed: ${error.message}`, true);
-                } finally {
-                    showLoading(false);
-                }
-            });
+        loginBtn.addEventListener('click', async () => {
+            showLoading(true);
+            const email = emailInput.value;
+            const password = passwordInput.value;
+            if (!email || !password) {
+                logMessage('Please enter an email and password.', true);
+                showLoading(false);
+                return;
+            }
+            try {
+                console.log('Attempting login with email:', email);
+                await signInWithEmailAndPassword(auth, email, password);
+                logMessage('Login successful.');
+            } catch (error) {
+                console.error('Login error:', error);
+                logMessage(`Login failed: ${error.message}`, true);
+            } finally {
+                showLoading(false);
+            }
+        });
 
-            logoutBtnAdmin.addEventListener('click', async () => {
-                showLoading(true);
-                try {
-                    await signOut(auth);
-                    logMessage('Logged out successfully.');
-                } catch (error) {
-                    console.error('Logout error:', error);
-                    logMessage(`Logout failed: ${error.message}`, true);
-                } finally {
-                    showLoading(false);
-                }
-            });
+        logoutBtnAdmin.addEventListener('click', async () => {
+            showLoading(true);
+            try {
+                await signOut(auth);
+                logMessage('Logged out successfully.');
+            } catch (error) {
+                console.error('Logout error:', error);
+                logMessage(`Logout failed: ${error.message}`, true);
+            } finally {
+                showLoading(false);
+            }
+        });
 
-            logoutBtnUser.addEventListener('click', async () => {
-                showLoading(true);
-                try {
-                    await signOut(auth);
-                    logMessage('Logged out successfully.');
-                } catch (error) {
-                    console.error('Logout error:', error);
-                    logMessage(`Logout failed: ${error.message}`, true);
-                } finally {
-                    showLoading(false);
-                }
-            });     uploadBtn.addEventListener('click', async () => {
+        logoutBtnUser.addEventListener('click', async () => {
+            showLoading(true);
+            try {
+                await signOut(auth);
+                logMessage('Logged out successfully.');
+            } catch (error) {
+                console.error('Logout error:', error);
+                logMessage(`Logout failed: ${error.message}`, true);
+            } finally {
+                showLoading(false);
+            }
+        });
+
+        uploadBtn.addEventListener('click', async () => {
             showLoading(true);
             const poiName = poiNameInput.value;
             const poiLat = parseFloat(poiLatInput.value);
@@ -1422,5 +1409,3 @@
     </script>
 </body>
 </html>
-
-
