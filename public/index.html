@@ -392,7 +392,7 @@
         let heatmapEnabled = false;
         let heatLayer;
         let animationPaused = false;
-        firebase.auth().setPersistence(firebase.auth.Auth.Persistence.NONE);
+
         const logMessage = (message, isError = false) => {
             messageText.textContent = message;
             messageText.style.color = isError ? '#ef4444' : '#4b5563';
